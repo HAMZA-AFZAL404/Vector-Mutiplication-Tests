@@ -1,0 +1,166 @@
+ # This is the test Written to check 4X4 matrix multiplication with Scalar Method
+
+
+ #include "macros.h"       
+.text
+# .global _start
+# .option norvc
+.globl rvtest_entry_point
+j rvtest_entry_point
+.globl expected_matrix_result
+.type expected_matrix_result, @object
+.align 3
+expected_matrix_result:
+    .byte 0, 6, 12, 18
+    .byte 0, 6, 12, 18
+    .byte 0, 6, 12, 18
+    .byte 0, 6, 12, 18
+.globl matrix1
+.type matrix1, @object
+.align 3
+
+matrix1:
+    .byte 0, 1, 2, 3
+    .byte 0, 1, 2, 3
+    .byte 0, 1, 2, 3
+    .byte 0, 1, 2, 3
+
+.globl matrix2
+.type matrix2, @object
+.align 3
+matrix2:
+    .byte 0, 1, 2, 3
+    .byte 0, 1, 2, 3
+    .byte 0, 1, 2, 3
+    .byte 0, 1, 2, 3
+
+result_matrix:
+    .byte 0, 0, 0, 0                                             
+rvtest_entry_point:
+
+# -------------------------Set the all mem PMP-----------------------------	
+	ALL_MEM_PMP
+# -------------------------------------------------------------------------
+	csrw satp, zero			                            // write zero to the satp (bare mode)
+# -------------------------------------------------------------------------
+
+	.set va,       	                0x1900000144	            // 39 bits of VA address
+	.set va_matrix1,                0x1900000018	            // 39 bits of VA address
+	.set va_matrix2,                0x1900000028	            // 39 bits of VA address	                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   		// 39 bits of VA address
+	.set va_result_matrix,          0x1900000038	            // 39 bits of VA address
+	.set va_expected_matrix_result, 0x1900000008	            // 39 bits of VA address              	
+
+# -------------------------Set the PTE for level2 for sv39-----------------
+	// level0 PTE setup for pa (0x1900000144 -> vm_enable)	
+	la a0, vm_enable                                            // loads the PA address in a0
+	li a1, ( PTE_D | PTE_A | PTE_W | PTE_R | PTE_V | PTE_X)     // sets the permission bits
+	PTE_SETUP_RV64(a0, a1, t0, t1, va, LEVEL2,sv39)             // setup the PTE for level0 for sv39
+ 	// level2 PTE setup for pa (0x1900000018 -> matrix1_data)
+	la a0,matrix1					            // loads the PA address in a0 
+	li a1, ( PTE_D | PTE_A | PTE_W | PTE_R | PTE_V | PTE_X)     // sets the permission bits
+	PTE_SETUP_RV64(a0, a1, t0, t1, va_matrix1, LEVEL2,sv39)     // setup the PTE for level0 for sv39
+
+     	// level2 PTE setup for pa (0x1900000028 -> matrix2_data)
+	la a0,matrix2					            // loads the PA address in a0 
+	li a1, ( PTE_D | PTE_A | PTE_W | PTE_R | PTE_V | PTE_X)     // sets the permission bits
+	PTE_SETUP_RV64(a0, a1, t0, t1, va_matrix2, LEVEL2,sv39)     // setup the PTE for level0 for sv39
+
+     	// level2 PTE setup for pa (0x1900000038 -> result_matrix)
+	la a0,result_matrix					    // loads the PA address in a0 
+	li a1, ( PTE_D | PTE_A | PTE_W | PTE_R | PTE_V | PTE_X)     // sets the permission bits
+	PTE_SETUP_RV64(a0, a1, t0, t1, va_result_matrix, LEVEL2,sv39)   // setup the PTE for level0 for sv39
+
+     	// level2 PTE setup for pa (0x1900000008 -> expected_result_matrix)
+	la a0,expected_matrix_result				    // loads the PA address in a0 
+	li a1, ( PTE_D | PTE_A | PTE_W | PTE_R | PTE_V | PTE_X)     // sets the permission bits
+	PTE_SETUP_RV64(a0, a1, t0, t1, va_expected_matrix_result, LEVEL2,sv39)   // setup the PTE for level0 for sv39    
+
+# -------------------------Set the SATP for virtulization------------------
+
+	SATP_SETUP_RV64 (sv39,pgtb_l2)                              // set the SATP for virtualization
+    li a1,va                                                        // loads the address of vm_enable 
+        CHANGE_T0_S_MODE(a1)                                        // changes mode M to S and set the MEPC value to a1
+
+#-------------------------Virtualization Enabeled-----------------------
+vm_enable:
+
+addi x0 ,x0,0
+
+main:
+    li a0, va_matrix1
+    li a1, va_matrix2
+    li a2, va_result_matrix
+    li t0, 4                                                        // number of rows/columns in the matrix
+
+outer_loop:
+    add a3, a0, zero                                                // save row pointer
+    add a5, a1, zero                                                // save column start pointer
+    li t6, 4                                                        // set a new counter for the inner loop
+inner_loop:
+    add a4, a5, zero                                                // save column pointer
+    li t1, 0                                                        // clear accumulator
+    li t5, 4                                                        // set a new counter for the dot product loop
+dot_product_loop:
+    lbu t2, 0(a3)                                                   // load word from matrix1
+    lbu t3, 0(a4)                                                   // load word from matrix2
+    mul t2, t2, t3                                                  // multiply
+    add t1, t1, t2                                                  // accumulate
+
+    addi a3, a3, 1                                                  // increment row pointer
+    addi a4, a4, 4                                                  // increment column pointer
+    addi t5, t5, -1                                                 // decrement counter
+    bnez t5, dot_product_loop                                       // if counter is not zero, loop
+
+    sb t1, 0(a2)                                                    // store word in result_matrix
+    addi a2, a2, 1                                                  // increment result pointer
+    addi a5, a5, 1                                                  // increment column start pointer
+    addi a3, a3, -4
+
+    addi t6, t6, -1                                                 // decrement counter
+    bnez t6, inner_loop                                             // if counter is not zero, loop
+
+    addi a0, a0, 4                                                  // increment row pointer
+
+    addi t0, t0, -1                                                 // decrement counter
+    bnez t0, outer_loop                                             // if counter is not zero, loop
+
+li t0, 16                                                           // number of elements in the matrix
+li a0, va_result_matrix
+li a1, va_expected_matrix_result
+
+compare_loop:
+    lbu t2, 0(a0)                                                   // load word from result_vector
+    lbu t3, 0(a1)                                                   // load word from expected_result_matrix
+    bne t2, t3, test_fail                                           // if the words are not equal, jump to test_fail
+
+    addi a0, a0, 1                                                  // increment result pointer
+    addi a1, a1, 1                                                  // increment expected result pointer
+
+    addi t0, t0, -1                                                 // decrement counter
+    bnez t0, compare_loop                                           // if counter is not zero, loop
+
+j test_pass                                                         // if all words are equal, jump to test_pass     
+
+test_pass:
+    li x1, 0                                                        // Write 0 in x1 if test pass
+    j exit                                                          // Jump to exit
+
+test_fail :
+    li x1, 1                                                        // Write 1 in x1 if test failed 
+
+COREV_VERIF_EXIT_LOGIC                                              // Exit logic       
+
+.section .data
+
+.align 12
+    pgtb_l3:                                                       
+        .zero 4096                                                 
+    pgtb_l2:                                                       
+        .zero 4096                                                       
+    pgtb_l1:                                                       
+        .zero 4096                                                 
+    pgtb_l0:                                                       
+        .zero 4096                                                                                                     
+
+.align 4; .global tohost;   tohost:   .dword 0;
+.align 4; .global fromhost; fromhost: .dword 0;
